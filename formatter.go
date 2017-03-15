@@ -17,14 +17,38 @@ const reset = ansi.Reset
 
 var (
 	baseTimestamp time.Time
+	defaultColorScheme *compiledColorScheme
 )
 
 func init() {
 	baseTimestamp = time.Now()
+	defaultColorScheme = &compiledColorScheme{
+		InfoLevelColor: ansi.
+	}
 }
 
 func miniTS() int {
 	return int(time.Since(baseTimestamp) / time.Second)
+}
+
+type ColorScheme struct {
+	InfoLevelStyle string
+	WarnLevelStyle string
+	ErrorLevelStyle string
+	FatalLevelStyle string
+	PanicLevelStyle string
+	DebugLevelStyle string
+	PrefixStyle string
+}
+
+type compiledColorScheme struct {
+	InfoLevelColor string
+	WarnLevelColor string
+	ErrorLevelColor string
+	FatalLevelColor string
+	PanicLevelColor string
+	DebugLevelColor string
+	PrefixColor string
 }
 
 type TextFormatter struct {
@@ -38,8 +62,9 @@ type TextFormatter struct {
 	// system that already adds timestamps.
 	DisableTimestamp bool
 
-	// Enable logging of just the time passed since beginning of execution.
-	ShortTimestamp bool
+	// Enable logging the full timestamp when a TTY is attached instead of just
+	// the time passed since beginning of execution.
+	FullTimestamp bool
 
 	// Timestamp format to use for display when a full timestamp is printed.
 	TimestampFormat string
@@ -49,43 +74,68 @@ type TextFormatter struct {
 	// be desired.
 	DisableSorting bool
 
+	// Wrap empty fields in quotes if true.
+	QuoteEmptyFields bool
+
+	// Can be set to the override the default quoting character "
+	// with something else. For example: ', or `.
+	QuoteCharacter string
+
 	// Pad msg field with spaces on the right for display.
 	// The value for this parameter will be the size of padding.
 	// Its default value is zero, which means no padding will be applied for msg.
 	SpacePadding int
 
+	// Color scheme to use.
+	colorScheme *compiledColorScheme
+
 	// Whether the logger's out is to a terminal
-	isTerminal   bool
-	terminalOnce sync.Once
+	isTerminal bool
+
+	sync.Once
+}
+
+func compileColorScheme(s *ColorScheme) *compiledColorScheme {
+}
+
+func (f *TextFormatter) init(entry *logrus.Entry) {
+	if len(f.QuoteCharacter) == 0 {
+		f.QuoteCharacter = "\""
+	}
+	if entry.Logger != nil {
+		f.isTerminal = logrus.IsTerminal(entry.Logger.Out)
+	}
+}
+
+func (f *TextFormatter) SetColorScheme(colorScheme *ColorScheme) {
+	f.colorScheme = compileColorScheme(colorScheme)
 }
 
 func (f *TextFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	var b *bytes.Buffer
 	var keys []string = make([]string, 0, len(entry.Data))
 	for k := range entry.Data {
-		if k != "prefix" {
-			keys = append(keys, k)
-		}
+		keys = append(keys, k)
 	}
 
 	if !f.DisableSorting {
 		sort.Strings(keys)
 	}
-
-	b := &bytes.Buffer{}
+	if entry.Buffer != nil {
+		b = entry.Buffer
+	} else {
+		b = &bytes.Buffer{}
+	}
 
 	prefixFieldClashes(entry.Data)
 
-	f.terminalOnce.Do(func() {
-		if entry.Logger != nil {
-			f.isTerminal = logrus.IsTerminal(entry.Logger.Out)
-		}
-	})
+	f.Do(func() { f.init(entry) })
 
 	isColored := (f.ForceColors || f.isTerminal) && !f.DisableColors
 
 	timestampFormat := f.TimestampFormat
 	if timestampFormat == "" {
-		timestampFormat = time.Stamp
+		timestampFormat = logrus.DefaultTimestampFormat
 	}
 	if isColored {
 		f.printColored(b, entry, keys, timestampFormat)
@@ -154,21 +204,26 @@ func (f *TextFormatter) printColored(b *bytes.Buffer, entry *logrus.Entry, keys 
 		}
 	}
 	for _, k := range keys {
-		v := entry.Data[k]
-		fmt.Fprintf(b, " %s%s%s=%+v", levelColor, k, reset, v)
+		if (k != "prefix") {
+			v := entry.Data[k]
+			fmt.Fprintf(b, " %s%s%s=%+v", levelColor, k, reset, v)
+		}
 	}
 }
 
-func needsQuoting(text string) bool {
+func (f *TextFormatter) needsQuoting(text string) bool {
+	if f.QuoteEmptyFields && len(text) == 0 {
+		return true
+	}
 	for _, ch := range text {
 		if !((ch >= 'a' && ch <= 'z') ||
 			(ch >= 'A' && ch <= 'Z') ||
 			(ch >= '0' && ch <= '9') ||
 			ch == '-' || ch == '.') {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func extractPrefix(msg string) (string, string) {
