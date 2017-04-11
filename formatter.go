@@ -17,14 +17,21 @@ const reset = ansi.Reset
 
 var (
 	baseTimestamp time.Time
-	defaultColorScheme *compiledColorScheme
+	defaultColorScheme *ColorScheme = &ColorScheme{
+		InfoLevelStyle: "green",
+		WarnLevelStyle: "yellow",
+		ErrorLevelStyle: "red",
+		FatalLevelStyle: "red",
+		PanicLevelStyle: "red",
+		DebugLevelStyle: "blue",
+		PrefixStyle: "cyan",
+		TimestampStyle: "black+h",
+	}
 )
 
 func init() {
 	baseTimestamp = time.Now()
-	defaultColorScheme = &compiledColorScheme{
-		InfoLevelColor: ansi.
-	}
+	defaultColorScheme = compileColorScheme(defaultColorScheme)
 }
 
 func miniTS() int {
@@ -39,16 +46,18 @@ type ColorScheme struct {
 	PanicLevelStyle string
 	DebugLevelStyle string
 	PrefixStyle string
+	TimestampStyle string
 }
 
 type compiledColorScheme struct {
-	InfoLevelColor string
-	WarnLevelColor string
-	ErrorLevelColor string
-	FatalLevelColor string
-	PanicLevelColor string
-	DebugLevelColor string
-	PrefixColor string
+	InfoLevelColor func(string) string
+	WarnLevelColor func(string) string
+	ErrorLevelColor func(string) string
+	FatalLevelColor func(string) string
+	PanicLevelColor func(string) string
+	DebugLevelColor func(string) string
+	PrefixColor func(string) string
+	TimestampColor func(string) string
 }
 
 type TextFormatter struct {
@@ -96,6 +105,16 @@ type TextFormatter struct {
 }
 
 func compileColorScheme(s *ColorScheme) *compiledColorScheme {
+	return &compiledColorScheme{
+		InfoLevelColor: ansi.ColorFunc(s.InfoLevelStyle),
+		WarnLevelColor: ansi.ColorFunc(s.WarnLevelStyle),
+		ErrorLevelColor: ansi.ColorFunc(s.ErrorLevelStyle),
+		FatalLevelColor: ansi.ColorFunc(s.FatalLevelStyle),
+		PanicLevelColor: ansi.ColorFunc(s.PanicLevelStyle),
+		DebugLevelColor: ansi.ColorFunc(s.DebugLevelStyle),
+		PrefixColor: ansi.ColorFunc(s.PrefixStyle),
+		TimestampColor: ansi.ColorFunc(s.TimestampStyle),
+	}
 }
 
 func (f *TextFormatter) init(entry *logrus.Entry) {
@@ -157,17 +176,21 @@ func (f *TextFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 }
 
 func (f *TextFormatter) printColored(b *bytes.Buffer, entry *logrus.Entry, keys []string, timestampFormat string) {
-	var levelColor string
+	var levelColor func(string) string
 	var levelText string
 	switch entry.Level {
 	case logrus.InfoLevel:
-		levelColor = ansi.Green
+		levelColor = f.colorScheme.InfoLevelColor
 	case logrus.WarnLevel:
-		levelColor = ansi.Yellow
-	case logrus.ErrorLevel, logrus.FatalLevel, logrus.PanicLevel:
-		levelColor = ansi.Red
+		levelColor = f.colorScheme.WarnLevelColor
+	case logrus.ErrorLevel:
+		levelColor = f.colorScheme.ErrorLevelColor
+	case logrus.FatalLevel:
+		levelColor = f.colorScheme.FatalLevelColor
+	case logrus.PanicLevel:
+		levelColor = f.colorScheme.PanicLevelColor
 	default:
-		levelColor = ansi.Blue
+		levelColor = f.colorScheme.DebugLevelColor
 	}
 
 	if entry.Level != logrus.WarnLevel {
@@ -180,11 +203,11 @@ func (f *TextFormatter) printColored(b *bytes.Buffer, entry *logrus.Entry, keys 
 	message := entry.Message
 
 	if prefixValue, ok := entry.Data["prefix"]; ok {
-		prefix = fmt.Sprint(" ", ansi.Cyan, prefixValue, ":", reset)
+		prefix = fmt.Sprint(" ", f.colorScheme.PrefixColor(prefixValue+":"))
 	} else {
 		prefixValue, trimmedMsg := extractPrefix(entry.Message)
 		if len(prefixValue) > 0 {
-			prefix = fmt.Sprint(" ", ansi.Cyan, prefixValue, ":", reset)
+			prefix = fmt.Sprint(" ", f.colorScheme.PrefixColor(prefixValue+":"))
 			message = trimmedMsg
 		}
 	}
@@ -195,7 +218,7 @@ func (f *TextFormatter) printColored(b *bytes.Buffer, entry *logrus.Entry, keys 
 	}
 
 	if f.DisableTimestamp {
-		fmt.Fprintf(b, "%s%s %s%+5s%s%s "+messageFormat, ansi.LightBlack, reset, levelColor, levelText, reset, prefix, message)
+		fmt.Fprintf(b, "%+5s%s "+messageFormat, levelColor(levelText), prefix, message)
 	} else {
 		if f.ShortTimestamp {
 			fmt.Fprintf(b, "%s[%04d]%s %s%+5s%s%s "+messageFormat, ansi.LightBlack, miniTS(), reset, levelColor, levelText, reset, prefix, message)
