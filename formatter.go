@@ -13,8 +13,6 @@ import (
 	"github.com/mgutz/ansi"
 )
 
-const reset = ansi.Reset
-
 var (
 	baseTimestamp time.Time
 	defaultColorScheme *ColorScheme = &ColorScheme{
@@ -199,8 +197,10 @@ func (f *TextFormatter) printColored(b *bytes.Buffer, entry *logrus.Entry, keys 
 		levelText = "WARN"
 	}
 
+	var timestamp string
 	prefix := ""
 	message := entry.Message
+	timestampColor := f.colorScheme.TimestampColor
 
 	if prefixValue, ok := entry.Data["prefix"]; ok {
 		prefix = fmt.Sprint(" ", f.colorScheme.PrefixColor(prefixValue+":"))
@@ -220,16 +220,17 @@ func (f *TextFormatter) printColored(b *bytes.Buffer, entry *logrus.Entry, keys 
 	if f.DisableTimestamp {
 		fmt.Fprintf(b, "%+5s%s "+messageFormat, levelColor(levelText), prefix, message)
 	} else {
-		if f.ShortTimestamp {
-			fmt.Fprintf(b, "%s[%04d]%s %s%+5s%s%s "+messageFormat, ansi.LightBlack, miniTS(), reset, levelColor, levelText, reset, prefix, message)
+		if !f.FullTimestamp {
+			timestamp = fmt.Sprintf("[%04d]", miniTS())
 		} else {
-			fmt.Fprintf(b, "%s[%s]%s %s%+5s%s%s "+messageFormat, ansi.LightBlack, entry.Time.Format(timestampFormat), reset, levelColor, levelText, reset, prefix, message)
+			timestamp = fmt.Sprintf("[%s]", entry.Time.Format(timestampFormat))
 		}
+		fmt.Fprintf(b, "%s %+5s%s "+messageFormat, timestampColor(timestamp), levelColor(levelText), prefix, message)
 	}
 	for _, k := range keys {
 		if (k != "prefix") {
 			v := entry.Data[k]
-			fmt.Fprintf(b, " %s%s%s=%+v", levelColor, k, reset, v)
+			fmt.Fprintf(b, " %s=%+v", levelColor(k), v)
 		}
 	}
 }
@@ -260,28 +261,31 @@ func extractPrefix(msg string) (string, string) {
 }
 
 func (f *TextFormatter) appendKeyValue(b *bytes.Buffer, key string, value interface{}) {
+
 	b.WriteString(key)
 	b.WriteByte('=')
+	f.appendValue(b, value)
+	b.WriteByte(' ')
+}
 
+func (f *TextFormatter) appendValue(b *bytes.Buffer, value interface{}) {
 	switch value := value.(type) {
 	case string:
-		if needsQuoting(value) {
+		if !f.needsQuoting(value) {
 			b.WriteString(value)
 		} else {
-			fmt.Fprintf(b, "%q", value)
+			fmt.Fprintf(b, "%s%v%s", f.QuoteCharacter, value, f.QuoteCharacter)
 		}
 	case error:
 		errmsg := value.Error()
-		if needsQuoting(errmsg) {
+		if !f.needsQuoting(errmsg) {
 			b.WriteString(errmsg)
 		} else {
-			fmt.Fprintf(b, "%q", value)
+			fmt.Fprintf(b, "%s%v%s", f.QuoteCharacter, errmsg, f.QuoteCharacter)
 		}
 	default:
 		fmt.Fprint(b, value)
 	}
-
-	b.WriteByte(' ')
 }
 
 // This is to not silently overwrite `time`, `msg` and `level` fields when
